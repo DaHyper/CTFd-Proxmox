@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>VM Console</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { background: #1a1a2e; font-family: sans-serif; color: #eee; overflow: hidden; }
+        #top-bar {
+            background: #16213e; padding: 6px 16px; display: flex;
+            align-items: center; justify-content: space-between; height: 36px;
+        }
+        #top-bar span { font-size: 13px; }
+        #top-bar button {
+            background: #e94560; border: none; color: #fff; padding: 4px 14px;
+            border-radius: 3px; cursor: pointer; font-size: 12px;
+        }
+        #screen { width: 100%; height: calc(100vh - 36px); }
+        #status {
+            position: absolute; top: 50%; left: 50%; transform: translate(-50%,-50%);
+            text-align: center; font-size: 16px;
+        }
+        #status.hidden { display: none; }
+        .spinner { border: 3px solid #333; border-top: 3px solid #e94560;
+            border-radius: 50%; width: 30px; height: 30px; margin: 0 auto 12px;
+            animation: spin 1s linear infinite; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        #cert-warning {
+            background: #2c1810; border: 1px solid #e94560; border-radius: 6px;
+            padding: 16px; margin-top: 16px; max-width: 480px; font-size: 13px;
+            line-height: 1.5; display: none;
+        }
+        #cert-warning a { color: #4fc3f7; }
+    </style>
+</head>
+<body>
+    <div id="top-bar">
+        <span>VM Console</span>
+        <button onclick="window.close()">Close</button>
+    </div>
+    <div id="screen"></div>
+    <div id="status">
+        <div class="spinner"></div>
+        <div>Connecting to VM console...</div>
+        <div id="cert-warning">
+            <strong>Connection failed.</strong> This is likely a certificate issue.<br>
+            Open <a id="cert-link" href="#" target="_blank"></a> in a new tab,
+            accept the certificate warning, then close that tab and try again.
+        </div>
+    </div>
+
+    <script type="module">
+        import RFB from './core/rfb.js';
+
+        const params = new URLSearchParams(window.location.search);
+        const wsUrl  = params.get('ws_url');
+        const ticket = params.get('ticket');
+        const host   = params.get('host');
+
+        const statusEl  = document.getElementById('status');
+        const certWarn  = document.getElementById('cert-warning');
+        const certLink  = document.getElementById('cert-link');
+
+        if (!wsUrl || !ticket) {
+            statusEl.innerHTML = '<div style="color:#e94560">Missing connection parameters.</div>';
+        } else {
+            // Set up cert link
+            const proxmoxUrl = 'https://' + host + ':8006';
+            certLink.href = proxmoxUrl;
+            certLink.textContent = proxmoxUrl;
+
+            try {
+                const rfb = new RFB(
+                    document.getElementById('screen'),
+                    wsUrl,
+                    { credentials: { password: ticket } }
+                );
+                rfb.scaleViewport = true;
+                rfb.resizeSession = true;
+
+                rfb.addEventListener('connect', function() {
+                    statusEl.classList.add('hidden');
+                });
+
+                rfb.addEventListener('disconnect', function(e) {
+                    statusEl.classList.remove('hidden');
+                    if (e.detail.clean) {
+                        statusEl.innerHTML = '<div>Disconnected.</div>';
+                    } else {
+                        statusEl.innerHTML = '<div style="color:#e94560">Connection lost.</div>';
+                        certWarn.style.display = 'block';
+                    }
+                });
+            } catch (err) {
+                statusEl.innerHTML = '<div style="color:#e94560">Failed to connect: ' + err.message + '</div>';
+                certWarn.style.display = 'block';
+            }
+        }
+    </script>
+</body>
+</html>

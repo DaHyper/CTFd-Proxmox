@@ -1,0 +1,142 @@
+{% if challenge_has_vm(challenge.id) %}
+<div class="card mt-3">
+    <div class="card-header">
+        <h5><i class="fas fa-server"></i> Virtual Machine</h5>
+    </div>
+    <div class="card-body" id="vm-control-box">
+        <div class="row">
+            <div class="col-md-6">
+                <p><strong>Status:</strong> <span id="vm-status" class="badge badge-secondary">Not Created</span></p>
+                <p id="vm-ip-row" style="display:none"><strong>IP Address:</strong> <code id="vm-ip">-</code></p>
+            </div>
+            <div class="col-md-6">
+                <p id="vm-time-row" style="display:none"><strong>Time Left:</strong> <span id="vm-remaining-time">-</span></p>
+            </div>
+        </div>
+
+        <div class="mt-2">
+            <button class="btn btn-success vm-btn" id="vm-create-btn" onclick="createVM()">
+                <i class="fas fa-plus"></i> Create VM
+            </button>
+
+            <div id="vm-control-buttons" style="display:none">
+                <button class="btn btn-primary btn-sm vm-btn" id="vm-start-btn"   onclick="vmPower('start')"><i class="fas fa-play"></i> Start</button>
+                <button class="btn btn-warning btn-sm vm-btn" id="vm-stop-btn"    onclick="vmPower('stop')"><i class="fas fa-stop"></i> Stop</button>
+                <button class="btn btn-info    btn-sm vm-btn" id="vm-restart-btn" onclick="vmPower('restart')"><i class="fas fa-redo"></i> Restart</button>
+                <button class="btn btn-dark    btn-sm vm-btn" id="vm-console-btn" onclick="openConsole()" style="display:none">
+                    <i class="fas fa-terminal"></i> Console
+                </button>
+            </div>
+        </div>
+
+        <div id="vm-loading" class="mt-2" style="display:none">
+            <div class="spinner-border spinner-border-sm" role="status"></div>
+            <span id="vm-loading-text">Processing...</span>
+        </div>
+        <div id="vm-error" class="alert alert-danger mt-2" style="display:none"></div>
+    </div>
+</div>
+
+<script>
+(function() {
+    var statusInterval = null;
+
+    $(document).ready(function() {
+        checkExistingVM();
+    });
+
+    function checkExistingVM() {
+        $.get('/proxmox/vm/status', function(r) {
+            if (r.success && r.vm) {
+                updateDisplay(r.vm);
+                startPolling();
+            }
+        });
+    }
+
+    window.createVM = function() {
+        showLoading('Creating VM... This may take a minute');
+        $.post('/proxmox/vm/create', function(r) {
+            if (r.success) { updateDisplay(r.vm); hideLoading(); startPolling(); }
+            else showError(r.error);
+        }).fail(function(xhr) {
+            var msg = (xhr.responseJSON && xhr.responseJSON.error) || 'Failed to create VM';
+            showError(msg);
+        });
+    };
+
+    window.vmPower = function(action) {
+        showLoading(action.charAt(0).toUpperCase() + action.slice(1) + 'ing VM...');
+        $.post('/proxmox/vm/power/' + action, function(r) {
+            if (r.success) { updateDisplay(r.vm); hideLoading(); }
+            else showError(r.error);
+        }).fail(function(xhr) {
+            showError((xhr.responseJSON && xhr.responseJSON.error) || 'Action failed');
+        });
+    };
+
+    window.openConsole = function() {
+        $.post('/proxmox/vnc', function(r) {
+            if (!r.success) { alert(r.error || 'Could not get console'); return; }
+            var viewerUrl = '/plugins/proxmox_vms/assets/novnc/viewer.html'
+                + '?ws_url=' + encodeURIComponent(r.ws_url)
+                + '&ticket=' + encodeURIComponent(r.ticket)
+                + '&host=' + encodeURIComponent(r.proxmox_host);
+            window.open(viewerUrl, 'vm_console', 'width=1280,height=800,menubar=no,toolbar=no');
+        }).fail(function() { alert('Failed to open console'); });
+    };
+
+    function updateDisplay(vm) {
+        var badge = $('#vm-status');
+        badge.removeClass('badge-secondary badge-success badge-danger badge-warning');
+
+        if (vm.status === 'running') {
+            badge.addClass('badge-success').text('Running');
+            $('#vm-start-btn').prop('disabled', true);
+            $('#vm-stop-btn, #vm-restart-btn').prop('disabled', false);
+            $('#vm-console-btn').show();
+        } else if (vm.status === 'stopped') {
+            badge.addClass('badge-danger').text('Stopped');
+            $('#vm-start-btn').prop('disabled', false);
+            $('#vm-stop-btn, #vm-restart-btn').prop('disabled', true);
+            $('#vm-console-btn').hide();
+        } else {
+            badge.addClass('badge-warning').text(vm.status);
+            $('#vm-console-btn').hide();
+        }
+
+        $('#vm-create-btn').hide();
+        $('#vm-control-buttons').show();
+
+        if (vm.vm_ip) { $('#vm-ip').text(vm.vm_ip); $('#vm-ip-row').show(); }
+        if (vm.remaining_time_formatted) { $('#vm-remaining-time').text(vm.remaining_time_formatted); $('#vm-time-row').show(); }
+    }
+
+    function startPolling() {
+        if (statusInterval) clearInterval(statusInterval);
+        statusInterval = setInterval(function() {
+            $.get('/proxmox/vm/status', function(r) {
+                if (r.success) updateDisplay(r.vm);
+            });
+        }, 10000);
+    }
+
+    function showLoading(text) {
+        $('#vm-loading-text').text(text);
+        $('#vm-loading').show();
+        $('#vm-control-box .vm-btn').prop('disabled', true);
+        $('#vm-error').hide();
+    }
+
+    function hideLoading() {
+        $('#vm-loading').hide();
+        $('#vm-control-box .vm-btn').prop('disabled', false);
+    }
+
+    function showError(message) {
+        $('#vm-error').text(message).show();
+        hideLoading();
+    }
+})();
+</script>
+{% endif %}

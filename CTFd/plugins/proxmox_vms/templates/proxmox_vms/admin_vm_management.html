@@ -1,0 +1,221 @@
+{% extends "admin/base.html" %}
+
+{% block content %}
+<div class="jumbotron">
+    <div class="container">
+        <h1>Proxmox VM Management</h1>
+    </div>
+</div>
+
+<div class="container">
+
+    <!-- Global VM Config -->
+    <div class="card mb-4">
+        <div class="card-header"><h5>Global VM Configuration</h5></div>
+        <div class="card-body">
+            <form id="config-form" class="form-inline">
+                <div class="form-group mr-3 mb-2">
+                    <label class="mr-2">Template VMID</label>
+                    <input type="number" class="form-control" id="cfg-template-id" placeholder="e.g. 9000" style="width:120px">
+                </div>
+                <div class="form-group mr-3 mb-2">
+                    <label class="mr-2">Template Name</label>
+                    <input type="text" class="form-control" id="cfg-template-name" placeholder="e.g. Kali Linux" style="width:180px">
+                </div>
+                <div class="form-group mr-3 mb-2">
+                    <label class="mr-2">Max Hours</label>
+                    <input type="number" class="form-control" id="cfg-max-hours" placeholder="4" style="width:80px">
+                </div>
+                <button type="submit" class="btn btn-primary mb-2">Save</button>
+            </form>
+            <div id="config-status" class="mt-2"></div>
+        </div>
+    </div>
+
+    <!-- Challenge VM Toggles -->
+    <div class="card mb-4">
+        <div class="card-header"><h5>Challenge VM Toggles</h5></div>
+        <div class="card-body">
+            <p class="text-muted">Enable VM for challenges. Users get a single shared VM that appears on every enabled challenge.</p>
+            <table class="table table-sm table-striped">
+                <thead><tr><th>Challenge</th><th>Category</th><th>VM Enabled</th></tr></thead>
+                <tbody id="challenge-list"><tr><td colspan="3" class="text-center">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Active VMs -->
+    <div class="card mb-4">
+        <div class="card-header d-flex justify-content-between">
+            <h5>Active User VMs</h5>
+            <button class="btn btn-primary btn-sm" onclick="loadVMList()"><i class="fas fa-sync"></i> Refresh</button>
+        </div>
+        <div class="card-body">
+            <table class="table table-striped">
+                <thead>
+                    <tr>
+                        <th>VM Name</th><th>VMID</th><th>User</th>
+                        <th>IP Address</th><th>Status</th><th>Time Left</th><th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="vm-list"><tr><td colspan="7" class="text-center">Loading...</td></tr></tbody>
+            </table>
+        </div>
+    </div>
+
+</div>
+
+<script>
+var csrfNonce = init.csrfNonce;
+
+function esc(str) {
+    if (str == null) return '';
+    var d = document.createElement('div');
+    d.appendChild(document.createTextNode(String(str)));
+    return d.innerHTML;
+}
+
+function jsonPost(url, body) {
+    return fetch(url, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+            'CSRF-Token': csrfNonce
+        },
+        body: JSON.stringify(body)
+    }).then(function(r){ return r.json(); });
+}
+
+function jsonGet(url) {
+    return fetch(url, {
+        headers: { 'CSRF-Token': csrfNonce }
+    }).then(function(r){ return r.json(); });
+}
+
+/* ---------- Init ---------- */
+document.addEventListener('DOMContentLoaded', function() {
+    loadConfig();
+    loadChallenges();
+    loadVMList();
+    setInterval(loadVMList, 30000);
+
+    document.getElementById('config-form').addEventListener('submit', function(e) {
+        e.preventDefault();
+        saveConfig();
+    });
+});
+
+/* ---------- Config ---------- */
+function loadConfig() {
+    jsonGet('/proxmox/admin/config').then(function(r) {
+        if (r.success && r.config) {
+            document.getElementById('cfg-template-id').value = r.config.proxmox_template_id;
+            document.getElementById('cfg-template-name').value = r.config.vm_template_name;
+            document.getElementById('cfg-max-hours').value = r.config.max_duration_hours;
+        }
+    });
+}
+
+function saveConfig() {
+    jsonPost('/proxmox/admin/config', {
+        proxmox_template_id: document.getElementById('cfg-template-id').value,
+        vm_template_name: document.getElementById('cfg-template-name').value,
+        max_duration_hours: document.getElementById('cfg-max-hours').value
+    }).then(function(r) {
+        var el = document.getElementById('config-status');
+        el.innerHTML = r.success
+            ? '<span class="text-success">Saved.</span>'
+            : '<span class="text-danger">Error saving.</span>';
+        setTimeout(function(){ el.innerHTML = ''; }, 3000);
+    });
+}
+
+/* ---------- Challenge toggles ---------- */
+function loadChallenges() {
+    jsonGet('/proxmox/admin/challenges').then(function(r) {
+        if (!r.success) return;
+        var tbody = document.getElementById('challenge-list');
+        tbody.innerHTML = '';
+        if (r.challenges.length === 0) {
+            tbody.innerHTML = '<tr><td colspan="3" class="text-center">No challenges found</td></tr>';
+            return;
+        }
+        r.challenges.forEach(function(c) {
+            var checked = c.vm_enabled ? 'checked' : '';
+            var tr = document.createElement('tr');
+            tr.innerHTML =
+                '<td>' + esc(c.name) + '</td>' +
+                '<td>' + esc(c.category) + '</td>' +
+                '<td>' +
+                    '<div class="custom-control custom-switch">' +
+                        '<input type="checkbox" class="custom-control-input" id="vm-toggle-' + c.id + '" ' + checked + '>' +
+                        '<label class="custom-control-label" for="vm-toggle-' + c.id + '"></label>' +
+                    '</div>' +
+                '</td>';
+            tr.querySelector('input').addEventListener('change', function() {
+                toggleChallengeVM(c.id, this.checked);
+            });
+            tbody.appendChild(tr);
+        });
+    });
+}
+
+function toggleChallengeVM(challengeId, enabled) {
+    jsonPost('/proxmox/admin/challenges/' + challengeId + '/vm', { enabled: enabled })
+        .catch(function() { alert('Failed to toggle VM'); loadChallenges(); });
+}
+
+/* ---------- VM list ---------- */
+function loadVMList() {
+    jsonGet('/proxmox/admin/vms').then(function(r) {
+        if (r.success) renderVMTable(r.vms);
+    });
+}
+
+function renderVMTable(vms) {
+    var tbody = document.getElementById('vm-list');
+    tbody.innerHTML = '';
+    if (vms.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center">No VMs found</td></tr>';
+        return;
+    }
+    vms.forEach(function(vm) {
+        var sc = vm.status === 'running' ? 'success' : 'danger';
+        var tr = document.createElement('tr');
+        tr.innerHTML =
+            '<td><strong>' + esc(vm.vm_name) + '</strong></td>' +
+            '<td><code>' + vm.proxmox_vmid + '</code></td>' +
+            '<td>' + esc(vm.username) + '</td>' +
+            '<td>' + (vm.vm_ip ? esc(vm.vm_ip) : '<em>N/A</em>') + '</td>' +
+            '<td><span class="badge badge-' + sc + '">' + esc(vm.status) + '</span></td>' +
+            '<td>' + (vm.remaining_time_formatted || 'Expired') + '</td>' +
+            '<td>' +
+                '<div class="btn-group btn-group-sm">' +
+                    '<button class="btn btn-success vm-act" data-id="' + vm.id + '" data-action="start" ' +
+                        (vm.status==='running'?'disabled':'') + '><i class="fas fa-play"></i></button>' +
+                    '<button class="btn btn-warning vm-act" data-id="' + vm.id + '" data-action="stop" ' +
+                        (vm.status==='stopped'?'disabled':'') + '><i class="fas fa-stop"></i></button>' +
+                    '<button class="btn btn-info vm-act" data-id="' + vm.id + '" data-action="restart">' +
+                        '<i class="fas fa-redo"></i></button>' +
+                    '<button class="btn btn-danger vm-act" data-id="' + vm.id + '" data-action="delete">' +
+                        '<i class="fas fa-trash"></i></button>' +
+                '</div>' +
+            '</td>';
+        tr.querySelectorAll('.vm-act').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                vmAction(this.dataset.id, this.dataset.action);
+            });
+        });
+        tbody.appendChild(tr);
+    });
+}
+
+function vmAction(vmId, action) {
+    if (action === 'delete' && !confirm('Delete this VM?')) return;
+    jsonPost('/proxmox/admin/vm/power/' + vmId + '/' + action, {}).then(function(r) {
+        if (r.success) loadVMList();
+        else alert('Action failed: ' + (r.error || 'unknown'));
+    });
+}
+</script>
+{% endblock %}
