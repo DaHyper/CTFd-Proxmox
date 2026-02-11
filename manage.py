@@ -3,6 +3,7 @@ from flask.cli import FlaskGroup
 
 load_dotenv()
 
+
 from CTFd import create_app
 
 app = create_app()

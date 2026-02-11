@@ -39,102 +39,136 @@
 
 <script>
 (function() {
+    var csrfNonce = init.csrfNonce;
     var statusInterval = null;
 
-    $(document).ready(function() {
+    function apiGet(url) {
+        return fetch(url, {
+            headers: { 'CSRF-Token': csrfNonce }
+        }).then(function(r) { return r.json(); });
+    }
+
+    function apiPost(url) {
+        return fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'CSRF-Token': csrfNonce
+            }
+        }).then(function(r) { return r.json(); });
+    }
+
+    document.addEventListener('DOMContentLoaded', function() {
         checkExistingVM();
     });
 
+    // Also check on Alpine/modal open since challenge.html may load dynamically
+    setTimeout(checkExistingVM, 500);
+
     function checkExistingVM() {
-        $.get('/proxmox/vm/status', function(r) {
+        apiGet('/proxmox/vm/status').then(function(r) {
             if (r.success && r.vm) {
                 updateDisplay(r.vm);
                 startPolling();
             }
-        });
+        }).catch(function() {});
     }
 
     window.createVM = function() {
         showLoading('Creating VM... This may take a minute');
-        $.post('/proxmox/vm/create', function(r) {
+        apiPost('/proxmox/vm/create').then(function(r) {
             if (r.success) { updateDisplay(r.vm); hideLoading(); startPolling(); }
-            else showError(r.error);
-        }).fail(function(xhr) {
-            var msg = (xhr.responseJSON && xhr.responseJSON.error) || 'Failed to create VM';
-            showError(msg);
+            else showError(r.error || 'Failed to create VM');
+        }).catch(function() {
+            showError('Failed to create VM');
         });
     };
 
     window.vmPower = function(action) {
         showLoading(action.charAt(0).toUpperCase() + action.slice(1) + 'ing VM...');
-        $.post('/proxmox/vm/power/' + action, function(r) {
+        apiPost('/proxmox/vm/power/' + action).then(function(r) {
             if (r.success) { updateDisplay(r.vm); hideLoading(); }
-            else showError(r.error);
-        }).fail(function(xhr) {
-            showError((xhr.responseJSON && xhr.responseJSON.error) || 'Action failed');
+            else showError(r.error || 'Action failed');
+        }).catch(function() {
+            showError('Action failed');
         });
     };
 
     window.openConsole = function() {
-        $.post('/proxmox/vnc', function(r) {
+        apiPost('/proxmox/vnc').then(function(r) {
             if (!r.success) { alert(r.error || 'Could not get console'); return; }
             var viewerUrl = '/plugins/proxmox_vms/assets/novnc/viewer.html'
                 + '?ws_url=' + encodeURIComponent(r.ws_url)
                 + '&ticket=' + encodeURIComponent(r.ticket)
                 + '&host=' + encodeURIComponent(r.proxmox_host);
             window.open(viewerUrl, 'vm_console', 'width=1280,height=800,menubar=no,toolbar=no');
-        }).fail(function() { alert('Failed to open console'); });
+        }).catch(function() { alert('Failed to open console'); });
     };
 
     function updateDisplay(vm) {
-        var badge = $('#vm-status');
-        badge.removeClass('badge-secondary badge-success badge-danger badge-warning');
+        var badge = document.getElementById('vm-status');
+        badge.className = 'badge';
 
         if (vm.status === 'running') {
-            badge.addClass('badge-success').text('Running');
-            $('#vm-start-btn').prop('disabled', true);
-            $('#vm-stop-btn, #vm-restart-btn').prop('disabled', false);
-            $('#vm-console-btn').show();
+            badge.classList.add('badge-success');
+            badge.textContent = 'Running';
+            document.getElementById('vm-start-btn').disabled = true;
+            document.getElementById('vm-stop-btn').disabled = false;
+            document.getElementById('vm-restart-btn').disabled = false;
+            document.getElementById('vm-console-btn').style.display = '';
         } else if (vm.status === 'stopped') {
-            badge.addClass('badge-danger').text('Stopped');
-            $('#vm-start-btn').prop('disabled', false);
-            $('#vm-stop-btn, #vm-restart-btn').prop('disabled', true);
-            $('#vm-console-btn').hide();
+            badge.classList.add('badge-danger');
+            badge.textContent = 'Stopped';
+            document.getElementById('vm-start-btn').disabled = false;
+            document.getElementById('vm-stop-btn').disabled = true;
+            document.getElementById('vm-restart-btn').disabled = true;
+            document.getElementById('vm-console-btn').style.display = 'none';
         } else {
-            badge.addClass('badge-warning').text(vm.status);
-            $('#vm-console-btn').hide();
+            badge.classList.add('badge-warning');
+            badge.textContent = vm.status;
+            document.getElementById('vm-console-btn').style.display = 'none';
         }
 
-        $('#vm-create-btn').hide();
-        $('#vm-control-buttons').show();
+        document.getElementById('vm-create-btn').style.display = 'none';
+        document.getElementById('vm-control-buttons').style.display = '';
 
-        if (vm.vm_ip) { $('#vm-ip').text(vm.vm_ip); $('#vm-ip-row').show(); }
-        if (vm.remaining_time_formatted) { $('#vm-remaining-time').text(vm.remaining_time_formatted); $('#vm-time-row').show(); }
+        if (vm.vm_ip) {
+            document.getElementById('vm-ip').textContent = vm.vm_ip;
+            document.getElementById('vm-ip-row').style.display = '';
+        }
+        if (vm.remaining_time_formatted) {
+            document.getElementById('vm-remaining-time').textContent = vm.remaining_time_formatted;
+            document.getElementById('vm-time-row').style.display = '';
+        }
     }
 
     function startPolling() {
         if (statusInterval) clearInterval(statusInterval);
         statusInterval = setInterval(function() {
-            $.get('/proxmox/vm/status', function(r) {
-                if (r.success) updateDisplay(r.vm);
-            });
+            apiGet('/proxmox/vm/status').then(function(r) {
+                if (r.success && r.vm) updateDisplay(r.vm);
+            }).catch(function() {});
         }, 10000);
     }
 
     function showLoading(text) {
-        $('#vm-loading-text').text(text);
-        $('#vm-loading').show();
-        $('#vm-control-box .vm-btn').prop('disabled', true);
-        $('#vm-error').hide();
+        document.getElementById('vm-loading-text').textContent = text;
+        document.getElementById('vm-loading').style.display = '';
+        var btns = document.querySelectorAll('#vm-control-box .vm-btn');
+        for (var i = 0; i < btns.length; i++) btns[i].disabled = true;
+        document.getElementById('vm-error').style.display = 'none';
     }
 
     function hideLoading() {
-        $('#vm-loading').hide();
-        $('#vm-control-box .vm-btn').prop('disabled', false);
+        document.getElementById('vm-loading').style.display = 'none';
+        var btns = document.querySelectorAll('#vm-control-box .vm-btn');
+        for (var i = 0; i < btns.length; i++) btns[i].disabled = false;
     }
 
     function showError(message) {
-        $('#vm-error').text(message).show();
+        var el = document.getElementById('vm-error');
+        el.textContent = message;
+        el.style.display = '';
         hideLoading();
     }
 })();
